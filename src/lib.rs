@@ -1,7 +1,9 @@
 #![cfg_attr(not(test), no_std)]
 
-use core::ops::{Index, IndexMut};
+use core::{num, ops::{Index, IndexMut}};
 
+//use anyhow::Ok;
+//use anyhow::Ok;
 use gc_headers::{GarbageCollectingHeap, HeapError, Pointer, Tracer};
 
 fn independent_elements_from<T>(i: usize, j: usize, slice: &mut [T]) -> Option<(&mut T, &mut T)> {
@@ -50,7 +52,13 @@ impl<const MAX_BLOCKS: usize> BlockTable<MAX_BLOCKS> {
     }
 
     fn available_block(&self) -> Option<usize> {
-        todo!("Return the lowest numbered unused block");
+        //todo!("Return the lowest numbered unused block");
+        for (i, block) in self.block_info.iter().enumerate(){
+            if block.is_none(){
+                return Some(i);
+            }
+        }
+        None
     }
 
     fn blocks_in_use(&self) -> impl Iterator<Item = usize> + '_ {
@@ -62,8 +70,30 @@ impl<const MAX_BLOCKS: usize> BlockTable<MAX_BLOCKS> {
             .map(|b| (b, self.block_info[b].unwrap().num_times_copied))
     }
 
-    fn address(&self, p: Pointer) -> anyhow::Result<usize, HeapError> {
-        todo!("Find the address, i.e., start + offset, for the Pointer `p`");
+    fn address(&self, p: Pointer) -> Result<usize, HeapError> {
+        //todo!("Find the address, i.e., start + offset, for the Pointer `p`");
+        
+
+
+        if p.block_num() >= MAX_BLOCKS{
+            return Err(HeapError::IllegalBlock(p.block_num(), MAX_BLOCKS - 1));
+        }
+
+        let block = match self.block_info[p.block_num()]
+        {
+            None => return Err(HeapError::UnallocatedBlock(p.block_num())),
+            Some(b) => b
+        };
+       
+        if p.offset() >= block.size{
+            return Err(HeapError::OffsetTooBig(p.offset(), p.block_num(), block.size));
+        }
+        if p.len() != block.size{
+            return Err(HeapError::MisalignedPointer(p.len(), block.size, p.block_num()));
+        }
+
+        let ad: usize = block.start + p.offset();
+        return Ok(ad)
         // Outline
         //
         // 1. If p has a block number that would be an illegal array access, report IllegalBlock.
@@ -99,16 +129,43 @@ impl<const HEAP_SIZE: usize> RamHeap<HEAP_SIZE> {
         self.next_address = 0;
     }
 
-    fn load(&self, address: usize) -> anyhow::Result<u64, HeapError> {
-        todo!("Return contents of heap at the given address. If address is illegal report it.");
+    fn load(&self, address: usize) -> Result<u64, HeapError> {
+        //todo!("Return contents of heap at the given address. If address is illegal report it.");
+        if address >= self.next_address || address < 0{
+            return Err(HeapError::IllegalAddress(address, self.next_address));
+        }
+
+        return Ok(self.heap[address]);
     }
 
-    fn store(&mut self, address: usize, value: u64) -> anyhow::Result<(), HeapError> {
-        todo!("Store value in heap at the given address. If address is illegal report it.");
+    fn store(&mut self, address: usize, value: u64) -> Result<(), HeapError> {
+        //todo!("Store value in heap at the given address. If address is illegal report it.");
+        if address > HEAP_SIZE || address < 0
+        {
+            return Err(HeapError::IllegalAddress(address, HEAP_SIZE));
+        }
+        self.heap[address] = value;
+        return Ok(());
     }
 
-    fn malloc(&mut self, num_words: usize) -> anyhow::Result<usize, HeapError> {
-        todo!("Perform basic malloc");
+    fn malloc(&mut self, num_words: usize) -> Result<usize, HeapError> {
+        //todo!("Perform basic malloc");
+
+        if num_words <= 0{
+            return Err(HeapError::ZeroSizeRequest);
+        }
+        
+        let ad = self.next_address + num_words - 1;
+        if ad >= HEAP_SIZE{
+            return Err(HeapError::OutOfMemory);
+        }
+        
+
+        let old = self.next_address;
+        self.next_address =  ad + 1; 
+    
+        return Ok(old);
+        
         // Outline
         //
         // If the request is of size zero, report ZeroSizeRequest
@@ -117,8 +174,19 @@ impl<const HEAP_SIZE: usize> RamHeap<HEAP_SIZE> {
         // Otherwise, update `self.next_address` and return the address of the newly allocated memory.
     }
 
-    fn copy(&self, src: &BlockInfo, dest: &mut Self) -> anyhow::Result<BlockInfo, HeapError> {
-        todo!("Copy memory contents from src to dest");
+    fn copy(&self, src: &BlockInfo, dest: &mut Self) -> Result<BlockInfo, HeapError> {
+        //todo!("Copy memory contents from src to dest");
+        let d = match dest.malloc(src.size){
+            Err(e) => return Err(e),
+            Ok(ad) => ad,
+        };
+
+        for i in 0..src.size{
+            let value = self.load(src.start + i)?;
+            dest.store(d + i, value)?;
+        }
+
+        return Ok(BlockInfo { start: d, size: src.size, num_times_copied: src.num_times_copied + 1 });
         // Outline
         //
         // Perform a malloc() in dest of the block's size.
@@ -142,17 +210,17 @@ impl<const HEAP_SIZE: usize, const MAX_BLOCKS: usize> GarbageCollectingHeap
         }
     }
 
-    fn address(&self, p: Pointer) -> anyhow::Result<usize, HeapError> {
+    fn address(&self, p: Pointer) -> Result<usize, HeapError> {
         self.block_info.address(p)
     }
 
-    fn load(&self, p: Pointer) -> anyhow::Result<u64, HeapError> {
+    fn load(&self, p: Pointer) -> Result<u64, HeapError> {
         self.block_info
             .address(p)
             .and_then(|address| self.heap.load(address))
     }
 
-    fn store(&mut self, p: Pointer, value: u64) -> anyhow::Result<(), HeapError> {
+    fn store(&mut self, p: Pointer, value: u64) -> Result<(), HeapError> {
         self.block_info
             .address(p)
             .and_then(|address| self.heap.store(address, value))
@@ -170,7 +238,7 @@ impl<const HEAP_SIZE: usize, const MAX_BLOCKS: usize> GarbageCollectingHeap
         self.block_info.blocks_num_copies()
     }
 
-    fn malloc<T: Tracer>(&mut self, num_words: usize, _: &T) -> anyhow::Result<Pointer, HeapError> {
+    fn malloc<T: Tracer>(&mut self, num_words: usize, _: &T) -> Result<Pointer, HeapError> {
         match self.block_info.available_block() {
             Some(block_num) => {
                 let start = self.heap.malloc(num_words)?;
@@ -195,19 +263,30 @@ pub struct CopyingHeap<const HEAP_SIZE: usize, const MAX_BLOCKS: usize> {
 }
 
 impl<const HEAP_SIZE: usize, const MAX_BLOCKS: usize> CopyingHeap<HEAP_SIZE, MAX_BLOCKS> {
-    fn collect<T: Tracer>(&mut self, tracer: &T) -> anyhow::Result<(), HeapError> {
+    fn collect<T: Tracer>(&mut self, tracer: &T) -> Result<(), HeapError> {
         // These lines are helpful for avoiding borrow checker problems with arrays.
         let inactive = (self.active_heap + 1) % 2;
         let (src, dest) =
             independent_elements_from(self.active_heap, inactive, &mut self.heaps).unwrap();
-        todo!("Implement copying collection.");
-        // Outline
-        //
-        // 1. Run the `trace()` method of the `tracer` to find blocks in use.
-        // 2. For each block in use:
-        //    * Copy the block from `src` to `dest`.
-        // 3. Clear the active heap.
-        // 4. Set `self.active_heap` to point at the newly active heap.
+       
+        let mut blocks = [false; MAX_BLOCKS];
+        tracer.trace(&mut blocks);
+
+        for i in 0..MAX_BLOCKS{
+            if blocks[i]{
+                let block = src.copy(&self.block_info[i].unwrap(), dest)?;
+                self.block_info[i] = Some(block);
+            }
+            else{
+                self.block_info[i] = None;
+            }
+        }
+
+        self.heaps[self.active_heap].clear();
+        self.active_heap = inactive;
+
+        Ok(())
+      
     }
 }
 
@@ -222,17 +301,17 @@ impl<const HEAP_SIZE: usize, const MAX_BLOCKS: usize> GarbageCollectingHeap
         }
     }
 
-    fn address(&self, p: Pointer) -> anyhow::Result<usize, HeapError> {
+    fn address(&self, p: Pointer) -> Result<usize, HeapError> {
         self.block_info.address(p)
     }
 
-    fn load(&self, p: Pointer) -> anyhow::Result<u64, HeapError> {
+    fn load(&self, p: Pointer) -> Result<u64, HeapError> {
         self.block_info
             .address(p)
             .and_then(|address| self.heaps[self.active_heap].load(address))
     }
 
-    fn store(&mut self, p: Pointer, value: u64) -> anyhow::Result<(), HeapError> {
+    fn store(&mut self, p: Pointer, value: u64) -> Result<(), HeapError> {
         self.block_info
             .address(p)
             .and_then(|address| self.heaps[self.active_heap].store(address, value))
@@ -254,18 +333,37 @@ impl<const HEAP_SIZE: usize, const MAX_BLOCKS: usize> GarbageCollectingHeap
         &mut self,
         num_words: usize,
         tracer: &T,
-    ) -> anyhow::Result<Pointer, HeapError> {
-        todo!("Implement malloc");
-        // Outline
-        //
-        // 1. Find an available block number
-        //    * If none are available, perform a collection.
-        //    * If none are still available, report out of blocks.
-        // 2. Perform a malloc in the currently active heap.
-        //    * If no space is available, perform a collection by calling self.collect().
-        //    * If no space is still available, report out of memory.
-        // 3. Create entry in the block table for the newly allocated block.
-        // 4. Return a pointer to the newly allocated block.
+    ) -> Result<Pointer, HeapError> {
+       
+        if num_words == 0{
+            return Err(HeapError::ZeroSizeRequest);
+        }
+        let avail_block = match self.block_info.available_block(){
+            None =>{
+                self.collect(tracer)?; 
+                match self.block_info.available_block(){
+                    None => return Err(HeapError::OutOfBlocks),
+                    Some(b) => b
+                }   
+            }
+            Some(b) => b
+        };
+
+        let ad = match self.heaps[self.active_heap].malloc(num_words) {
+            Err(_) =>{
+                self.collect(tracer)?;
+                match self.heaps[self.active_heap].malloc(num_words) {
+                    Err(e) => return Err(HeapError::OutOfMemory),
+                    Ok(a) => a
+                }
+            }
+            Ok(a) => a
+        };
+
+        self.block_info[avail_block] = Some(BlockInfo{start: ad, size: num_words, num_times_copied: 0});
+
+        return Ok(Pointer::new(avail_block, num_words));
+       
     }
 
     fn assert_no_strays(&self) {
@@ -313,7 +411,7 @@ impl<const HEAP_SIZE: usize, const MAX_BLOCKS: usize, const MAX_COPIES: usize>
         )
     }
 
-    fn heap_and_gen_for(&self, block_num: usize) -> anyhow::Result<(usize, usize), HeapError> {
+    fn heap_and_gen_for(&self, block_num: usize) -> Result<(usize, usize), HeapError> {
         if block_num >= MAX_BLOCKS {
             Err(HeapError::IllegalBlock(block_num, MAX_BLOCKS - 1))
         } else {
@@ -328,7 +426,7 @@ impl<const HEAP_SIZE: usize, const MAX_BLOCKS: usize, const MAX_COPIES: usize>
         }
     }
 
-    fn collect_gen_0<T: Tracer>(&mut self, tracer: &T) -> anyhow::Result<(), HeapError> {
+    fn collect_gen_0<T: Tracer>(&mut self, tracer: &T) -> Result<(), HeapError> {
         // This line is necessary because the borrow checker disallows mutable references to 
         // multiple array elements. By modifying the variables below, you should be able to
         // achieve everything necessary.
@@ -356,7 +454,7 @@ impl<const HEAP_SIZE: usize, const MAX_BLOCKS: usize, const MAX_COPIES: usize>
         block_info: &mut BlockTable<MAX_BLOCKS>,
         src: &RamHeap<HEAP_SIZE>,
         dest: &mut RamHeap<HEAP_SIZE>,
-    ) -> anyhow::Result<(), HeapError> {
+    ) -> Result<(), HeapError> {
         todo!("Complete implementation.");
         // Outline
         //
@@ -379,7 +477,7 @@ impl<const HEAP_SIZE: usize, const MAX_BLOCKS: usize, const MAX_COPIES: usize> G
         }
     }
 
-    fn load(&self, p: Pointer) -> anyhow::Result<u64, HeapError> {
+    fn load(&self, p: Pointer) -> Result<u64, HeapError> {
         let (heap, gen) = self.heap_and_gen_for(p.block_num())?;
         let address = self.block_info.address(p)?;
         (if gen == 0 {
@@ -390,7 +488,7 @@ impl<const HEAP_SIZE: usize, const MAX_BLOCKS: usize, const MAX_COPIES: usize> G
         .load(address)
     }
 
-    fn store(&mut self, p: Pointer, value: u64) -> anyhow::Result<(), HeapError> {
+    fn store(&mut self, p: Pointer, value: u64) -> Result<(), HeapError> {
         let (heap, gen) = self.heap_and_gen_for(p.block_num())?;
         let address = self.block_info.address(p)?;
         (if gen == 0 {
@@ -401,7 +499,7 @@ impl<const HEAP_SIZE: usize, const MAX_BLOCKS: usize, const MAX_COPIES: usize> G
         .store(address, value)
     }
 
-    fn address(&self, p: Pointer) -> anyhow::Result<usize, HeapError> {
+    fn address(&self, p: Pointer) -> Result<usize, HeapError> {
         self.block_info.address(p)
     }
 
@@ -421,7 +519,7 @@ impl<const HEAP_SIZE: usize, const MAX_BLOCKS: usize, const MAX_COPIES: usize> G
         &mut self,
         num_words: usize,
         tracer: &T,
-    ) -> anyhow::Result<Pointer, HeapError> {
+    ) -> Result<Pointer, HeapError> {
         todo!("Implement generational malloc");
         // Outline
         //
