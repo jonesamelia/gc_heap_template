@@ -427,12 +427,57 @@ impl<const HEAP_SIZE: usize, const MAX_BLOCKS: usize, const MAX_COPIES: usize>
     }
 
     fn collect_gen_0<T: Tracer>(&mut self, tracer: &T) -> Result<(), HeapError> {
-        // This line is necessary because the borrow checker disallows mutable references to 
-        // multiple array elements. By modifying the variables below, you should be able to
-        // achieve everything necessary.
         let (active_0, inactive_0, active_1, inactive_1, block_info) =
             self.active_inactive_gen_0_gen_1();
-        todo!("Complete implementation.");
+        //todo!("Complete implementation.");
+        let mut gen_1_collected = false;
+        let mut used_blocks: [bool; MAX_BLOCKS] = [false; MAX_BLOCKS];
+
+        tracer.trace(&mut used_blocks);
+        for block in 0..MAX_BLOCKS{
+            if !used_blocks[block] && block_info[block].is_some(){
+                block_info[block] = None;
+            }
+        }
+
+        for(block, &used) in used_blocks.iter().enumerate(){
+            if used{
+                if let Some(used_info) = block_info[block]{
+                    if used_info.num_times_copied == MAX_COPIES{
+                        if gen_1_collected{
+                            match active_0.copy(&used_info, inactive_1){
+                                Ok(new_info) => block_info[block] = Some(new_info),
+                                Err(e) => return Err(e)
+                            }
+                        }
+                        else {
+                            match active_0.copy(&used_info, active_1){
+                                Ok(new_info) => {block_info[block] = Some(new_info)},
+                                Err(_) => {
+                                    gen_1_collected = true;
+                                    Self::collect_gen_1(&used_blocks, block_info, active_1, inactive_1)?;
+                                    match active_0.copy(&used_info, inactive_1){
+                                        Ok(new_info) => block_info[block] = Some(new_info),
+                                        Err(e) => return Err(e)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    else if used_info.num_times_copied < MAX_COPIES{
+                        let new_info = active_0.copy(&used_info, inactive_0)?;
+                        block_info[block] = Some(new_info);
+                    }
+                }
+            }
+            
+        }
+        active_0.clear();
+        self.active_gen_0 = (self.active_gen_0 + 1) % 2;
+        if gen_1_collected{
+            self.active_gen_1 = (self.active_gen_1 + 1) % 2;
+        }
+        return Ok(())
         // Outline
         //
         // 1. Call the tracer to find out what blocks are in use.
@@ -452,10 +497,23 @@ impl<const HEAP_SIZE: usize, const MAX_BLOCKS: usize, const MAX_COPIES: usize>
     fn collect_gen_1(
         blocks_used: &[bool; MAX_BLOCKS],
         block_info: &mut BlockTable<MAX_BLOCKS>,
-        src: &RamHeap<HEAP_SIZE>,
+        src: &mut RamHeap<HEAP_SIZE>,
         dest: &mut RamHeap<HEAP_SIZE>,
     ) -> Result<(), HeapError> {
-        todo!("Complete implementation.");
+        //todo!("Complete implementation.");
+        for (block, &used) in blocks_used.iter().enumerate(){
+            if used{
+                if let Some(used_info) = block_info[block] {
+                   if used_info.num_times_copied > MAX_COPIES{
+                        let new_info: BlockInfo = src.copy(&used_info, dest)?;
+                        block_info[block] = Some(new_info);
+                    } 
+                }
+                
+            }
+        }
+        src.clear();
+        Ok(())
         // Outline
         //
         // 1. For each block in use:
@@ -520,7 +578,33 @@ impl<const HEAP_SIZE: usize, const MAX_BLOCKS: usize, const MAX_COPIES: usize> G
         num_words: usize,
         tracer: &T,
     ) -> Result<Pointer, HeapError> {
-        todo!("Implement generational malloc");
+        //todo!("Implement generational malloc");
+        if num_words == 0 {
+            return Err(HeapError::ZeroSizeRequest);
+        }
+        let block = match self.block_info.available_block(){
+            Some(block) => block,
+            None => {
+                self.collect_gen_0(tracer)?;
+                match self.block_info.available_block(){
+                    Some(block) => block,
+                    None => return Err(HeapError::OutOfBlocks)
+                }
+            }
+        };
+        let start = match self.gen_0[self.active_gen_0].malloc(num_words){
+            Ok(ad) => ad,
+            Err(_) => {
+                self.collect_gen_0(tracer)?;
+                match self.gen_0[self.active_gen_0].malloc(num_words){
+                    Ok(ad) => ad,
+                    Err(_) => return Err(HeapError::OutOfMemory)
+                }
+            }
+        };
+
+        self.block_info[block] = Some(BlockInfo{start, size: num_words, num_times_copied: 0});
+        Ok(Pointer::new(block, num_words))
         // Outline
         //
         // 1. Find an available block number
