@@ -1,6 +1,7 @@
 #![cfg_attr(not(test), no_std)]
 
 use core::{num, ops::{Index, IndexMut}};
+use core::result::Result;
 
 use gc_headers::{GarbageCollectingHeap, HeapError, Pointer, Tracer};
 
