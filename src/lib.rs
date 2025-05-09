@@ -2,8 +2,6 @@
 
 use core::{num, ops::{Index, IndexMut}};
 
-//use anyhow::Ok;
-//use anyhow::Ok;
 use gc_headers::{GarbageCollectingHeap, HeapError, Pointer, Tracer};
 
 fn independent_elements_from<T>(i: usize, j: usize, slice: &mut [T]) -> Option<(&mut T, &mut T)> {
